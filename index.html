@@ -87,6 +87,8 @@ input, select, textarea{ font-family: inherit; }
   *{ animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
+button:disabled, input:disabled, select:disabled{ opacity: 0.6; cursor: not-allowed; }
+
 /* =========================================================
    BUTTONS
    ========================================================= */
@@ -265,6 +267,8 @@ textarea{ resize: vertical; min-height: 60px; }
   margin-right: 5px;
   vertical-align: middle;
 }
+.sync-status.is-offline::before{ background: var(--color-danger); }
+.sync-status.is-connecting::before{ background: var(--color-border-strong); }
 
 .content{
   max-width: 720px;
@@ -526,9 +530,18 @@ textarea{ resize: vertical; min-height: 60px; }
   font-size: 0.85rem; font-weight: 600;
   box-shadow: var(--shadow-lg);
   z-index: 60;
+  max-width: 90vw;
+  text-align: center;
   animation: toastIn .2s ease;
 }
+.toast.toast-error{ background: var(--color-danger); }
 @keyframes toastIn{ from{ opacity: 0; transform: translate(-50%, 10px); } to{ opacity: 1; transform: translate(-50%, 0); } }
+
+/* Full-screen boot loader (session check) */
+.boot-loader{
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  color: var(--color-text-muted); font-size: 0.9rem; font-weight: 600;
+}
 
 /* =========================================================
    DESKTOP / TABLET (min-width 640px+)
@@ -558,8 +571,11 @@ textarea{ resize: vertical; min-height: 60px; }
 </head>
 <body>
 
+<!-- ======================= BOOT LOADER (cek session Supabase) ======================= -->
+<div id="bootLoader" class="boot-loader">Memuat…</div>
+
 <!-- ======================= LOGIN SCREEN ======================= -->
-<section id="loginScreen" class="login-screen">
+<section id="loginScreen" class="login-screen" hidden>
   <div class="login-card">
     <div class="login-emblem" aria-hidden="true">
       <svg viewBox="0 0 64 64" width="32" height="32" fill="none">
@@ -569,12 +585,12 @@ textarea{ resize: vertical; min-height: 60px; }
     </div>
     <p class="login-eyebrow">Menuju 4 Desember 2027</p>
     <h1 class="login-title">Tabungan Nikah<br/>Bersama</h1>
-    <!-- <p class="login-sub">Masuk untuk memantau progres tabungan kalian berdua.</p> -->
+    <p class="login-sub">Masuk untuk memantau progres tabungan kalian berdua.</p>
 
     <form id="loginForm" class="login-form" novalidate>
       <div class="field">
         <label for="loginEmail">Email</label>
-        <input type="email" id="loginEmail" placeholder="Masukkan Username" autocomplete="username" required />
+        <input type="email" id="loginEmail" placeholder="nama@email.com" autocomplete="username" required />
       </div>
       <div class="field">
         <label for="loginPassword">Kata sandi</label>
@@ -583,10 +599,9 @@ textarea{ resize: vertical; min-height: 60px; }
           <button type="button" id="togglePassword" class="toggle-password" aria-label="Tampilkan kata sandi">Tampilkan</button>
         </div>
       </div>
-      <p id="loginError" class="login-error" role="alert" hidden>Email atau kata sandi salah. Silakan coba lagi.</p>
-      <button type="submit" class="btn btn-primary btn-block">Masuk</button>
+      <p id="loginError" class="login-error" role="alert" hidden></p>
+      <button type="submit" id="loginSubmitBtn" class="btn btn-primary btn-block">Masuk</button>
     </form>
-    <!-- <p class="login-hint">Contoh akses: <strong>baby@gmail.com</strong> / <strong>baby</strong></p> -->
   </div>
 </section>
 
@@ -596,8 +611,7 @@ textarea{ resize: vertical; min-height: 60px; }
   <!-- Top bar -->
   <header class="topbar">
     <div class="topbar-brand">
-      <!-- <span class="topbar-emblem" aria-hidden="true">TN</span> -->
-      <span class="topbar-title">Tabungan Nikah Bersama</span>
+      <!-- <span class="topbar-title">Tabungan Nikah Bersama</span> -->
     </div>
     <div class="topbar-actions">
       <span id="syncStatus" class="sync-status" aria-live="polite"></span>
@@ -629,7 +643,7 @@ textarea{ resize: vertical; min-height: 60px; }
         <div id="targetDisplay" class="target-value">Rp 0</div>
         <form id="targetForm" class="target-form" hidden>
           <input type="text" inputmode="numeric" id="targetInput" placeholder="Contoh: 150.000.000" />
-          <button type="submit" class="btn btn-primary btn-xs">Simpan</button>
+          <button type="submit" class="btn btn-primary btn-xs" id="saveTargetBtn">Simpan</button>
           <button type="button" id="cancelTargetBtn" class="btn btn-ghost btn-xs">Batal</button>
         </form>
       </div>
@@ -721,8 +735,12 @@ textarea{ resize: vertical; min-height: 60px; }
         </table>
       </div>
 
+      <div id="loadingState" class="empty-state" hidden>
+        <p>Memuat data…</p>
+      </div>
+
       <div id="emptyState" class="empty-state" hidden>
-        <p>Belum ada transaksi di sini.</p>
+        <p>Belum ada transaksi.</p>
         <p class="empty-sub">Ketuk tombol "+ Tambah Transaksi" untuk mulai mencatat.</p>
       </div>
     </section>
@@ -777,7 +795,7 @@ textarea{ resize: vertical; min-height: 60px; }
 
       <div class="field" id="kategoriPendapatanWrap" hidden>
         <label for="kategoriPendapatanInput">Kategori</label>
-        <input type="text" id="kategoriPendapatanInput" placeholder="Contoh: Gaji, Bonus, Side Job" />
+        <input type="text" id="kategoriPendapatanInput" placeholder="Contoh: Gaji, Bonus, Side Job" maxlength="80" />
       </div>
 
       <div class="field" id="kategoriPengeluaranWrap" hidden>
@@ -804,7 +822,7 @@ textarea{ resize: vertical; min-height: 60px; }
 
       <div class="field">
         <label for="keteranganInput">Keterangan <span class="optional-tag">(opsional)</span></label>
-        <textarea id="keteranganInput" rows="2" placeholder="Catatan tambahan..."></textarea>
+        <textarea id="keteranganInput" rows="2" placeholder="Catatan tambahan..." maxlength="500"></textarea>
       </div>
 
       <div class="modal-actions">
@@ -830,744 +848,11 @@ textarea{ resize: vertical; min-height: 60px; }
 <!-- Toast -->
 <div id="toast" class="toast" hidden></div>
 
-<script>
-'use strict';
-
-/* =========================================================
-   KONSTANTA & KUNCI PENYIMPANAN
-   ========================================================= */
-const STORAGE_KEYS = {
-  AUTH: 'wn_auth',
-  TARGET: 'wn_target',
-  TRANSACTIONS: 'wn_transactions',
-};
-
-const VALID_CREDENTIAL = {
-  email: 'baby',
-  password: 'baby',
-};
-
-const WEDDING_DATE = new Date('2027-12-04T00:00:00');
-const DEFAULT_TARGET = 150000000; // Rp 150.000.000
-
-/* =========================================================
-   STATE APLIKASI
-   ========================================================= */
-let transactions = [];
-let targetAmount = DEFAULT_TARGET;
-let activeTab = 'gabungan';       // 'pria' | 'wanita' | 'gabungan'
-let jenisFilter = 'semua';        // 'semua' | 'pendapatan' | 'pengeluaran'
-let kategoriPengeluaranFilter = 'semua'; // 'semua' | 'Kebutuhan' | 'Keinginan'
-let editingId = null;             // id transaksi yang sedang diedit, null jika mode tambah
-let pendingDeleteId = null;
-
-const SYNC_POLL_MS = 4000;        // interval polling data bersama (ms)
-let syncInterval = null;
-let isSyncing = false;
-
-/* =========================================================
-   ELEMEN DOM
-   ========================================================= */
-const $ = (id) => document.getElementById(id);
-
-const loginScreen = $('loginScreen');
-const dashboardScreen = $('dashboardScreen');
-const loginForm = $('loginForm');
-const loginEmail = $('loginEmail');
-const loginPassword = $('loginPassword');
-const loginError = $('loginError');
-const togglePasswordBtn = $('togglePassword');
-const logoutBtn = $('logoutBtn');
-
-const editTargetBtn = $('editTargetBtn');
-const targetDisplay = $('targetDisplay');
-const targetForm = $('targetForm');
-const targetInput = $('targetInput');
-const cancelTargetBtn = $('cancelTargetBtn');
-
-const progressFill = $('progressFill');
-const progressPercent = $('progressPercent');
-const progressLabel = $('progressLabel');
-
-const sumTotal = $('sumTotal');
-const sumRemaining = $('sumRemaining');
-const sumPria = $('sumPria');
-const sumWanita = $('sumWanita');
-
-const tabButtons = document.querySelectorAll('.tab-btn');
-const filterJenis = $('filterJenis');
-const filterKategoriPengeluaran = $('filterKategoriPengeluaran');
-
-const tableTitle = $('tableTitle');
-const tableCount = $('tableCount');
-const txTableBody = $('txTableBody');
-const emptyState = $('emptyState');
-
-const fabAdd = $('fabAdd');
-const modalOverlay = $('modalOverlay');
-const modalTitle = $('modalTitle');
-const closeModalBtn = $('closeModalBtn');
-const cancelModalBtn = $('cancelModalBtn');
-const txForm = $('txForm');
-const txId = $('txId');
-const kategoriPendapatanWrap = $('kategoriPendapatanWrap');
-const kategoriPengeluaranWrap = $('kategoriPengeluaranWrap');
-const kategoriPendapatanInput = $('kategoriPendapatanInput');
-const kategoriPengeluaranInput = $('kategoriPengeluaranInput');
-const nominalInput = $('nominalInput');
-const tanggalInput = $('tanggalInput');
-const keteranganInput = $('keteranganInput');
-
-const confirmOverlay = $('confirmOverlay');
-const cancelDeleteBtn = $('cancelDeleteBtn');
-const confirmDeleteBtn = $('confirmDeleteBtn');
-
-const toastEl = $('toast');
-let toastTimer = null;
-
-/* =========================================================
-   UTILITAS
-   ========================================================= */
-function formatRupiah(number) {
-  const n = Number(number) || 0;
-  return 'Rp ' + n.toLocaleString('id-ID', { maximumFractionDigits: 0 });
-}
-
-function parseRupiahInput(str) {
-  const digits = String(str || '').replace(/\D/g, '');
-  return digits ? parseInt(digits, 10) : 0;
-}
-
-function formatNumberLive(str) {
-  const digits = String(str || '').replace(/\D/g, '');
-  return digits ? Number(digits).toLocaleString('id-ID') : '';
-}
-
-function formatTanggalDisplay(isoDate) {
-  if (!isoDate) return '-';
-  const d = new Date(isoDate + 'T00:00:00');
-  return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function todayISO() {
-  const d = new Date();
-  const offset = d.getTimezoneOffset();
-  const local = new Date(d.getTime() - offset * 60000);
-  return local.toISOString().slice(0, 10);
-}
-
-function uid() {
-  return 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-}
-
-function showToast(message) {
-  clearTimeout(toastTimer);
-  toastEl.textContent = message;
-  toastEl.hidden = false;
-  toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2200);
-}
-
-/* =========================================================
-   PENYIMPANAN BERSAMA (shared cloud storage)
-   Transaksi & target disimpan sebagai data "shared" agar Anda
-   dan pasangan melihat data yang sama, bukan tersimpan lokal
-   per perangkat seperti localStorage.
-   ========================================================= */
-async function storageGetJSON(key) {
-  try {
-    const res = await window.storage.get(key, true);
-    return res ? JSON.parse(res.value) : null;
-  } catch (e) {
-    return null; // key belum ada / gagal diambil
-  }
-}
-
-async function storageSetJSON(key, value) {
-  try {
-    const res = await window.storage.set(key, JSON.stringify(value), true);
-    return !!res;
-  } catch (e) {
-    console.error('Gagal menyimpan data bersama:', e);
-    showToast('Gagal menyimpan, periksa koneksi internet');
-    return false;
-  }
-}
-
-async function loadTransactions() {
-  const remote = await storageGetJSON(STORAGE_KEYS.TRANSACTIONS);
-  if (remote) {
-    transactions = remote;
-    return;
-  }
-  // Data dummy awal, hanya dibuat sekali saat penyimpanan bersama masih kosong
-  transactions = [
-    {
-      id: uid(),
-      penabung: 'pria',
-      jenis: 'pendapatan',
-      kategori: 'Gaji Bulanan',
-      nominal: 5000000,
-      tanggal: todayISO(),
-      keterangan: 'Gaji bulan ini disisihkan untuk nikah',
-    },
-    {
-      id: uid(),
-      penabung: 'wanita',
-      jenis: 'pendapatan',
-      kategori: 'Bonus Kerja',
-      nominal: 3500000,
-      tanggal: todayISO(),
-      keterangan: 'Bonus akhir tahun',
-    },
-    {
-      id: uid(),
-      penabung: 'pria',
-      jenis: 'pengeluaran',
-      kategori: 'Keinginan',
-      nominal: 250000,
-      tanggal: todayISO(),
-      keterangan: 'Servis kendaraan',
-    },
-  ];
-  await saveTransactions();
-}
-
-async function saveTransactions() {
-  await storageSetJSON(STORAGE_KEYS.TRANSACTIONS, transactions);
-}
-
-async function loadTarget() {
-  const remote = await storageGetJSON(STORAGE_KEYS.TARGET);
-  if (typeof remote === 'number' && remote > 0) {
-    targetAmount = remote;
-    return;
-  }
-  targetAmount = DEFAULT_TARGET;
-  await saveTarget();
-}
-
-async function saveTarget() {
-  await storageSetJSON(STORAGE_KEYS.TARGET, targetAmount);
-}
-
-/* =========================================================
-   SINKRONISASI OTOMATIS (polling)
-   Mengecek data bersama secara berkala supaya perubahan yang
-   diinput pasangan ikut muncul di layar Anda tanpa perlu
-   memuat ulang halaman.
-   ========================================================= */
-function startSyncPolling() {
-  stopSyncPolling();
-  syncInterval = setInterval(pollForUpdates, SYNC_POLL_MS);
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-}
-
-function stopSyncPolling() {
-  if (syncInterval) clearInterval(syncInterval);
-  syncInterval = null;
-  document.removeEventListener('visibilitychange', handleVisibilityChange);
-}
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') pollForUpdates();
-}
-
-async function pollForUpdates() {
-  if (isSyncing) return;
-  isSyncing = true;
-  try {
-    const [remoteTx, remoteTarget] = await Promise.all([
-      storageGetJSON(STORAGE_KEYS.TRANSACTIONS),
-      storageGetJSON(STORAGE_KEYS.TARGET),
-    ]);
-
-    let changed = false;
-    if (remoteTx && JSON.stringify(remoteTx) !== JSON.stringify(transactions)) {
-      transactions = remoteTx;
-      changed = true;
-    }
-    if (typeof remoteTarget === 'number' && remoteTarget !== targetAmount) {
-      targetAmount = remoteTarget;
-      changed = true;
-    }
-
-    if (changed) {
-      renderTarget();
-      renderSummary();
-      renderTable();
-    }
-    updateSyncStatus();
-  } finally {
-    isSyncing = false;
-  }
-}
-
-function updateSyncStatus() {
-  const el = $('syncStatus');
-  if (!el) return;
-  const time = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  el.textContent = `Tersinkron ${time}`;
-}
-
-/* =========================================================
-   AUTENTIKASI
-   ========================================================= */
-function isLoggedIn() {
-  return localStorage.getItem(STORAGE_KEYS.AUTH) === 'true';
-}
-
-function login(email, password) {
-  if (email.trim().toLowerCase() === VALID_CREDENTIAL.email && password === VALID_CREDENTIAL.password) {
-    localStorage.setItem(STORAGE_KEYS.AUTH, 'true');
-    return true;
-  }
-  return false;
-}
-
-function logout() {
-  stopSyncPolling();
-  localStorage.removeItem(STORAGE_KEYS.AUTH);
-  loginScreen.hidden = false;
-  dashboardScreen.hidden = true;
-  loginForm.reset();
-  loginError.hidden = true;
-}
-
-function enterDashboard() {
-  loginScreen.hidden = true;
-  dashboardScreen.hidden = false;
-  bootDashboard();
-}
-
-loginForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const ok = login(loginEmail.value, loginPassword.value);
-  if (ok) {
-    loginError.hidden = true;
-    enterDashboard();
-  } else {
-    loginError.hidden = false;
-  }
-});
-
-togglePasswordBtn.addEventListener('click', () => {
-  const isPassword = loginPassword.type === 'password';
-  loginPassword.type = isPassword ? 'text' : 'password';
-  togglePasswordBtn.textContent = isPassword ? 'Sembunyikan' : 'Tampilkan';
-});
-
-logoutBtn.addEventListener('click', () => {
-  logout();
-});
-
-/* =========================================================
-   COUNTDOWN TIMER
-   ========================================================= */
-function updateCountdown() {
-  const now = new Date();
-  let diff = WEDDING_DATE.getTime() - now.getTime();
-  if (diff < 0) diff = 0;
-
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-  const minutes = Math.floor((diff / (1000 * 60)) % 60);
-  const seconds = Math.floor((diff / 1000) % 60);
-
-  $('cdDays').textContent = String(days).padStart(2, '0');
-  $('cdHours').textContent = String(hours).padStart(2, '0');
-  $('cdMinutes').textContent = String(minutes).padStart(2, '0');
-  $('cdSeconds').textContent = String(seconds).padStart(2, '0');
-}
-
-let countdownInterval = null;
-function startCountdown() {
-  updateCountdown();
-  if (countdownInterval) clearInterval(countdownInterval);
-  countdownInterval = setInterval(updateCountdown, 1000);
-}
-
-/* =========================================================
-   TARGET DANA NIKAH (EDITABLE)
-   ========================================================= */
-function renderTarget() {
-  targetDisplay.textContent = formatRupiah(targetAmount);
-}
-
-editTargetBtn.addEventListener('click', () => {
-  targetInput.value = targetAmount.toLocaleString('id-ID');
-  targetDisplay.hidden = true;
-  targetForm.hidden = false;
-  targetInput.focus();
-});
-
-cancelTargetBtn.addEventListener('click', () => {
-  targetForm.hidden = true;
-  targetDisplay.hidden = false;
-});
-
-targetInput.addEventListener('input', (e) => {
-  e.target.value = formatNumberLive(e.target.value);
-});
-
-targetForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const value = parseRupiahInput(targetInput.value);
-  if (value <= 0) {
-    showToast('Target harus lebih dari Rp 0');
-    return;
-  }
-  targetAmount = value;
-  await saveTarget();
-  targetForm.hidden = true;
-  targetDisplay.hidden = false;
-  renderTarget();
-  renderSummary();
-  updateSyncStatus();
-  showToast('Target dana nikah diperbarui');
-});
-
-/* =========================================================
-   PERHITUNGAN RINGKASAN
-   ========================================================= */
-function computeTotals() {
-  let totalPria = 0;
-  let totalWanita = 0;
-
-  transactions.forEach((tx) => {
-    const sign = tx.jenis === 'pendapatan' ? 1 : -1;
-    if (tx.penabung === 'pria') totalPria += sign * tx.nominal;
-    else if (tx.penabung === 'wanita') totalWanita += sign * tx.nominal;
-  });
-
-  const total = totalPria + totalWanita;
-  const remaining = Math.max(targetAmount - total, 0);
-  return { totalPria, totalWanita, total, remaining };
-}
-
-function renderSummary() {
-  const { totalPria, totalWanita, total, remaining } = computeTotals();
-
-  sumTotal.textContent = formatRupiah(total);
-  sumRemaining.textContent = formatRupiah(remaining);
-  sumPria.textContent = formatRupiah(totalPria);
-  sumWanita.textContent = formatRupiah(totalWanita);
-
-  const percent = targetAmount > 0 ? Math.min((total / targetAmount) * 100, 100) : 0;
-  const percentClamped = Math.max(percent, 0);
-  progressFill.style.width = percentClamped.toFixed(1) + '%';
-  progressPercent.textContent = percentClamped.toFixed(1) + '%';
-  progressLabel.textContent = `${formatRupiah(total)} dari ${formatRupiah(targetAmount)}`;
-}
-
-/* =========================================================
-   TAB SWITCHER
-   ========================================================= */
-const TAB_LABELS = {
-  pria: 'Tabungan Pria',
-  wanita: 'Tabungan Wanita',
-  gabungan: 'Tabungan Gabungan',
-};
-
-tabButtons.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    activeTab = btn.dataset.tab;
-    tabButtons.forEach((b) => {
-      const isActive = b === btn;
-      b.classList.toggle('is-active', isActive);
-      b.setAttribute('aria-selected', String(isActive));
-    });
-    tableTitle.textContent = TAB_LABELS[activeTab];
-    renderTable();
-  });
-});
-
-/* =========================================================
-   FILTER
-   ========================================================= */
-filterJenis.addEventListener('change', () => {
-  jenisFilter = filterJenis.value;
-  const isPengeluaran = jenisFilter === 'pengeluaran';
-  filterKategoriPengeluaran.disabled = !isPengeluaran;
-  if (!isPengeluaran) {
-    filterKategoriPengeluaran.value = 'semua';
-    kategoriPengeluaranFilter = 'semua';
-  }
-  renderTable();
-});
-
-filterKategoriPengeluaran.addEventListener('change', () => {
-  kategoriPengeluaranFilter = filterKategoriPengeluaran.value;
-  renderTable();
-});
-
-/* =========================================================
-   RENDER TABEL TRANSAKSI
-   ========================================================= */
-function getFilteredTransactions() {
-  return transactions
-    .filter((tx) => (activeTab === 'gabungan' ? true : tx.penabung === activeTab))
-    .filter((tx) => (jenisFilter === 'semua' ? true : tx.jenis === jenisFilter))
-    .filter((tx) => {
-      if (jenisFilter !== 'pengeluaran' || kategoriPengeluaranFilter === 'semua') return true;
-      return tx.jenis === 'pengeluaran' && tx.kategori === kategoriPengeluaranFilter;
-    })
-    .sort((a, b) => (a.tanggal < b.tanggal ? 1 : a.tanggal > b.tanggal ? -1 : 0));
-}
-
-function renderTable() {
-  const list = getFilteredTransactions();
-  tableCount.textContent = `${list.length} transaksi`;
-
-  if (list.length === 0) {
-    txTableBody.innerHTML = '';
-    emptyState.hidden = false;
-    return;
-  }
-  emptyState.hidden = true;
-
-  txTableBody.innerHTML = list.map((tx) => {
-    const penabungLabel = tx.penabung === 'pria' ? 'Pria' : 'Wanita';
-    const penabungBadge = tx.penabung === 'pria' ? 'badge-pria' : 'badge-wanita';
-    const jenisLabel = tx.jenis === 'pendapatan' ? 'Pendapatan' : 'Pengeluaran';
-    const jenisBadge = tx.jenis === 'pendapatan' ? 'badge-pendapatan' : 'badge-pengeluaran';
-    const nominalSign = tx.jenis === 'pendapatan' ? '+' : '-';
-    const nominalColor = tx.jenis === 'pendapatan' ? 'var(--color-success)' : 'var(--color-danger)';
-    const keterangan = tx.keterangan ? escapeHtml(tx.keterangan) : '<span style="color:var(--color-text-muted)">—</span>';
-
-    return `
-      <tr>
-        <td data-label="Tanggal">${formatTanggalDisplay(tx.tanggal)}</td>
-        <td data-label="Oleh"><span class="badge ${penabungBadge}">${penabungLabel}</span></td>
-        <td data-label="Jenis"><span class="badge ${jenisBadge}">${jenisLabel}</span></td>
-        <td data-label="Kategori">${escapeHtml(tx.kategori || '-')}</td>
-        <td data-label="Nominal" class="col-nominal" style="color:${nominalColor}">${nominalSign} ${formatRupiah(tx.nominal)}</td>
-        <td data-label="Keterangan" class="col-keterangan">${keterangan}</td>
-        <td class="col-aksi">
-          <div class="row-actions">
-            <button type="button" class="action-btn edit-btn" data-id="${tx.id}">Edit</button>
-            <button type="button" class="action-btn delete-btn" data-id="${tx.id}">Hapus</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
-
-  txTableBody.querySelectorAll('.edit-btn').forEach((btn) => {
-    btn.addEventListener('click', () => openEditModal(btn.dataset.id));
-  });
-  txTableBody.querySelectorAll('.delete-btn').forEach((btn) => {
-    btn.addEventListener('click', () => openDeleteConfirm(btn.dataset.id));
-  });
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-/* =========================================================
-   MODAL: TAMBAH / EDIT TRANSAKSI
-   ========================================================= */
-function openAddModal() {
-  editingId = null;
-  modalTitle.textContent = 'Tambah Transaksi';
-  txForm.reset();
-  txId.value = '';
-  kategoriPendapatanWrap.hidden = true;
-  kategoriPengeluaranWrap.hidden = true;
-  tanggalInput.value = todayISO();
-  modalOverlay.hidden = false;
-  document.body.style.overflow = 'hidden';
-}
-
-function openEditModal(id) {
-  const tx = transactions.find((t) => t.id === id);
-  if (!tx) return;
-  editingId = id;
-  modalTitle.textContent = 'Edit Transaksi';
-  txForm.reset();
-  txId.value = tx.id;
-
-  const penabungRadio = txForm.querySelector(`input[name="penabung"][value="${tx.penabung}"]`);
-  if (penabungRadio) penabungRadio.checked = true;
-
-  const jenisRadio = txForm.querySelector(`input[name="jenis"][value="${tx.jenis}"]`);
-  if (jenisRadio) jenisRadio.checked = true;
-
-  toggleKategoriFields(tx.jenis);
-  if (tx.jenis === 'pendapatan') {
-    kategoriPendapatanInput.value = tx.kategori || '';
-  } else {
-    kategoriPengeluaranInput.value = tx.kategori || '';
-  }
-
-  nominalInput.value = Number(tx.nominal).toLocaleString('id-ID');
-  tanggalInput.value = tx.tanggal;
-  keteranganInput.value = tx.keterangan || '';
-
-  modalOverlay.hidden = false;
-  document.body.style.overflow = 'hidden';
-}
-
-function closeModal() {
-  modalOverlay.hidden = true;
-  document.body.style.overflow = '';
-  editingId = null;
-}
-
-function toggleKategoriFields(jenis) {
-  if (jenis === 'pendapatan') {
-    kategoriPendapatanWrap.hidden = false;
-    kategoriPengeluaranWrap.hidden = true;
-    kategoriPengeluaranInput.value = '';
-  } else if (jenis === 'pengeluaran') {
-    kategoriPengeluaranWrap.hidden = false;
-    kategoriPendapatanWrap.hidden = true;
-    kategoriPendapatanInput.value = '';
-  } else {
-    kategoriPendapatanWrap.hidden = true;
-    kategoriPengeluaranWrap.hidden = true;
-  }
-}
-
-txForm.querySelectorAll('input[name="jenis"]').forEach((radio) => {
-  radio.addEventListener('change', (e) => toggleKategoriFields(e.target.value));
-});
-
-nominalInput.addEventListener('input', (e) => {
-  e.target.value = formatNumberLive(e.target.value);
-});
-
-fabAdd.addEventListener('click', openAddModal);
-closeModalBtn.addEventListener('click', closeModal);
-cancelModalBtn.addEventListener('click', closeModal);
-modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) closeModal();
-});
-
-txForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-
-  const penabungEl = txForm.querySelector('input[name="penabung"]:checked');
-  const jenisEl = txForm.querySelector('input[name="jenis"]:checked');
-
-  if (!penabungEl) { showToast('Pilih penabung terlebih dahulu (Pria/Wanita)'); return; }
-  if (!jenisEl) { showToast('Pilih jenis transaksi terlebih dahulu'); return; }
-
-  const jenis = jenisEl.value;
-  let kategori = '';
-  if (jenis === 'pendapatan') {
-    kategori = kategoriPendapatanInput.value.trim();
-    if (!kategori) { showToast('Isi kategori pendapatan'); return; }
-  } else {
-    kategori = kategoriPengeluaranInput.value;
-    if (!kategori) { showToast('Pilih kategori pengeluaran'); return; }
-  }
-
-  const nominal = parseRupiahInput(nominalInput.value);
-  if (nominal <= 0) { showToast('Nominal harus lebih dari Rp 0'); return; }
-
-  const tanggal = tanggalInput.value;
-  if (!tanggal) { showToast('Isi tanggal transaksi'); return; }
-
-  const keterangan = keteranganInput.value.trim();
-
-  if (editingId) {
-    const idx = transactions.findIndex((t) => t.id === editingId);
-    if (idx !== -1) {
-      transactions[idx] = {
-        ...transactions[idx],
-        penabung: penabungEl.value,
-        jenis,
-        kategori,
-        nominal,
-        tanggal,
-        keterangan,
-      };
-    }
-    showToast('Transaksi berhasil diperbarui');
-  } else {
-    transactions.push({
-      id: uid(),
-      penabung: penabungEl.value,
-      jenis,
-      kategori,
-      nominal,
-      tanggal,
-      keterangan,
-    });
-    showToast('Transaksi berhasil ditambahkan');
-  }
-
-  await saveTransactions();
-  closeModal();
-  renderSummary();
-  renderTable();
-  updateSyncStatus();
-});
-
-/* =========================================================
-   HAPUS TRANSAKSI (dengan konfirmasi)
-   ========================================================= */
-function openDeleteConfirm(id) {
-  pendingDeleteId = id;
-  confirmOverlay.hidden = false;
-}
-
-function closeDeleteConfirm() {
-  pendingDeleteId = null;
-  confirmOverlay.hidden = true;
-}
-
-cancelDeleteBtn.addEventListener('click', closeDeleteConfirm);
-confirmOverlay.addEventListener('click', (e) => {
-  if (e.target === confirmOverlay) closeDeleteConfirm();
-});
-
-confirmDeleteBtn.addEventListener('click', async () => {
-  if (!pendingDeleteId) return;
-  transactions = transactions.filter((t) => t.id !== pendingDeleteId);
-  await saveTransactions();
-  closeDeleteConfirm();
-  renderSummary();
-  renderTable();
-  updateSyncStatus();
-  showToast('Transaksi berhasil dihapus');
-});
-
-/* =========================================================
-   BOOTSTRAP DASHBOARD
-   ========================================================= */
-async function bootDashboard() {
-  await Promise.all([loadTarget(), loadTransactions()]);
-  renderTarget();
-  renderSummary();
-  renderTable();
-  startCountdown();
-  startSyncPolling();
-  updateSyncStatus();
-}
-
-/* =========================================================
-   INISIALISASI APLIKASI
-   ========================================================= */
-document.addEventListener('DOMContentLoaded', () => {
-  if (isLoggedIn()) {
-    enterDashboard();
-  } else {
-    loginScreen.hidden = false;
-    dashboardScreen.hidden = true;
-  }
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (!modalOverlay.hidden) closeModal();
-    if (!confirmOverlay.hidden) closeDeleteConfirm();
-  }
-});
-
-</script>
+<!-- Supabase client (self-hosted, UMD build) — tidak lagi tergantung CDN agar halaman tidak macet di "Memuat…" -->
+<script src="vendor/supabase.js"></script>
+<!-- Konfigurasi project Anda (isi url & anonKey) -->
+<script src="config.js"></script>
+<!-- Logic aplikasi -->
+<script src="app.js"></script>
 </body>
 </html>

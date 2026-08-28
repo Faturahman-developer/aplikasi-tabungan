@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Debug Supabase</title>
+<style>
+  body{ font-family: monospace; padding: 24px; background:#0F172A; color:#E2E8F0; line-height:1.8; }
+  .ok{ color:#4ADE80; }
+  .fail{ color:#F87171; }
+  .pending{ color:#FBBF24; }
+  pre{ background:#1E293B; padding:12px; border-radius:8px; white-space:pre-wrap; word-break:break-all; }
+</style>
+</head>
+<body>
+<h2>Debug Koneksi Supabase</h2>
+<div id="log"></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+const logEl = document.getElementById('log');
+function line(text, cls) {
+  const p = document.createElement('div');
+  p.textContent = text;
+  if (cls) p.className = cls;
+  logEl.appendChild(p);
+  console.log(text);
+}
+
+line('Langkah 1: Script mulai jalan… ✅', 'ok');
+
+line('Langkah 2: Cek config.js…');
+if (!window.SUPABASE_CONFIG) {
+  line('❌ GAGAL: window.SUPABASE_CONFIG tidak ditemukan. config.js tidak ter-load atau salah nama variabel.', 'fail');
+} else {
+  line('✅ config.js ditemukan. url=' + window.SUPABASE_CONFIG.url + ' anonKey(depan 20 char)=' + String(window.SUPABASE_CONFIG.anonKey).slice(0,20) + '…', 'ok');
+}
+
+line('Langkah 3: Cek pustaka supabase-js dari CDN…');
+if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+  line('❌ GAGAL: window.supabase tidak ada / createClient bukan fungsi. Pustaka CDN gagal dimuat.', 'fail');
+} else {
+  line('✅ Pustaka supabase-js berhasil dimuat.', 'ok');
+}
+
+line('Langkah 4: Membuat client…');
+let client = null;
+try {
+  client = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey);
+  line('✅ Client berhasil dibuat.', 'ok');
+} catch (e) {
+  line('❌ GAGAL membuat client: ' + e.message, 'fail');
+}
+
+line('Langkah 5: Memanggil getSession() (timeout 6 detik)…', 'pending');
+if (client) {
+  let done = false;
+  const timeoutId = setTimeout(() => {
+    if (!done) {
+      line('❌ TIMEOUT: getSession() tidak merespons dalam 6 detik. Ini kemungkinan besar akar masalahnya.', 'fail');
+    }
+  }, 6000);
+
+  client.auth.getSession()
+    .then(({ data, error }) => {
+      done = true;
+      clearTimeout(timeoutId);
+      if (error) {
+        line('⚠️ getSession() selesai TAPI ada error: ' + error.message, 'fail');
+      } else {
+        line('✅ getSession() SELESAI. Session: ' + (data.session ? 'ADA (sudah login sebelumnya)' : 'TIDAK ADA (belum login)'), 'ok');
+      }
+      line('Langkah 6: Tes query sederhana ke tabel settings…');
+      return client.from('settings').select('target_amount').eq('id', 1).maybeSingle();
+    })
+    .then((res) => {
+      if (!res) return;
+      if (res.error) {
+        line('❌ Query settings GAGAL: ' + res.error.message + ' (code: ' + (res.error.code || '-') + ')', 'fail');
+        line('   → Kemungkinan: RLS memblokir karena belum login (ini WAJAR jika belum login), atau tabel belum dibuat / SQL migration belum dijalankan.', 'pending');
+      } else {
+        line('✅ Query settings berhasil: ' + JSON.stringify(res.data), 'ok');
+      }
+    })
+    .catch((e) => {
+      done = true;
+      clearTimeout(timeoutId);
+      line('❌ EXCEPTION saat getSession()/query: ' + e.message, 'fail');
+    });
+} else {
+  line('Dilewati karena client gagal dibuat.', 'fail');
+}
+</script>
+</body>
+</html>
