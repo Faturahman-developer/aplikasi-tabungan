@@ -254,6 +254,17 @@ textarea{ resize: vertical; min-height: 60px; }
   font-size: 0.75rem;
 }
 .topbar-title{ font-family: var(--font-display); font-weight: 700; font-size: 1.02rem; letter-spacing: -0.01em; }
+.topbar-actions{ display: flex; align-items: center; gap: 12px; }
+.sync-status{ font-size: 0.72rem; color: var(--color-text-muted); font-weight: 600; white-space: nowrap; }
+.sync-status::before{
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  margin-right: 5px;
+  vertical-align: middle;
+}
 
 .content{
   max-width: 720px;
@@ -556,7 +567,7 @@ textarea{ resize: vertical; min-height: 60px; }
         <circle cx="40" cy="34" r="14" stroke="currentColor" stroke-width="3"/>
       </svg>
     </div>
-    <p class="login-eyebrow">Menuju 4 Maret 2027</p>
+    <p class="login-eyebrow">Menuju 4 Desember 2027</p>
     <h1 class="login-title">Tabungan Nikah<br/>Bersama</h1>
     <!-- <p class="login-sub">Masuk untuk memantau progres tabungan kalian berdua.</p> -->
 
@@ -588,7 +599,10 @@ textarea{ resize: vertical; min-height: 60px; }
       <!-- <span class="topbar-emblem" aria-hidden="true">TN</span> -->
       <span class="topbar-title">Tabungan Nikah Bersama</span>
     </div>
-    <button id="logoutBtn" class="btn btn-ghost btn-sm">Keluar</button>
+    <div class="topbar-actions">
+      <span id="syncStatus" class="sync-status" aria-live="polite"></span>
+      <button id="logoutBtn" class="btn btn-ghost btn-sm">Keluar</button>
+    </div>
   </header>
 
   <main class="content">
@@ -596,7 +610,7 @@ textarea{ resize: vertical; min-height: 60px; }
     <!-- Target & Countdown Card -->
     <section class="card invite-card">
       <p class="invite-eyebrow">Menabung menuju</p>
-      <h2 class="invite-date">4 Maret 2027</h2>
+      <h2 class="invite-date">4 Desember 2027</h2>
 
       <div class="countdown" id="countdown" aria-live="polite">
         <div class="countdown-unit"><span id="cdDays">00</span><small>Hari</small></div>
@@ -833,7 +847,7 @@ const VALID_CREDENTIAL = {
   password: 'baby',
 };
 
-const WEDDING_DATE = new Date('2027-03-04T00:00:00');
+const WEDDING_DATE = new Date('2027-12-04T00:00:00');
 const DEFAULT_TARGET = 150000000; // Rp 150.000.000
 
 /* =========================================================
@@ -846,6 +860,10 @@ let jenisFilter = 'semua';        // 'semua' | 'pendapatan' | 'pengeluaran'
 let kategoriPengeluaranFilter = 'semua'; // 'semua' | 'Kebutuhan' | 'Keinginan'
 let editingId = null;             // id transaksi yang sedang diedit, null jika mode tambah
 let pendingDeleteId = null;
+
+const SYNC_POLL_MS = 4000;        // interval polling data bersama (ms)
+let syncInterval = null;
+let isSyncing = false;
 
 /* =========================================================
    ELEMEN DOM
@@ -950,19 +968,38 @@ function showToast(message) {
 }
 
 /* =========================================================
-   PENYIMPANAN (localStorage)
+   PENYIMPANAN BERSAMA (shared cloud storage)
+   Transaksi & target disimpan sebagai data "shared" agar Anda
+   dan pasangan melihat data yang sama, bukan tersimpan lokal
+   per perangkat seperti localStorage.
    ========================================================= */
-function loadTransactions() {
+async function storageGetJSON(key) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-    if (raw) {
-      transactions = JSON.parse(raw);
-      return;
-    }
+    const res = await window.storage.get(key, true);
+    return res ? JSON.parse(res.value) : null;
   } catch (e) {
-    console.error('Gagal memuat transaksi:', e);
+    return null; // key belum ada / gagal diambil
   }
-  // Data dummy awal
+}
+
+async function storageSetJSON(key, value) {
+  try {
+    const res = await window.storage.set(key, JSON.stringify(value), true);
+    return !!res;
+  } catch (e) {
+    console.error('Gagal menyimpan data bersama:', e);
+    showToast('Gagal menyimpan, periksa koneksi internet');
+    return false;
+  }
+}
+
+async function loadTransactions() {
+  const remote = await storageGetJSON(STORAGE_KEYS.TRANSACTIONS);
+  if (remote) {
+    transactions = remote;
+    return;
+  }
+  // Data dummy awal, hanya dibuat sekali saat penyimpanan bersama masih kosong
   transactions = [
     {
       id: uid(),
@@ -992,21 +1029,84 @@ function loadTransactions() {
       keterangan: 'Servis kendaraan',
     },
   ];
-  saveTransactions();
+  await saveTransactions();
 }
 
-function saveTransactions() {
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+async function saveTransactions() {
+  await storageSetJSON(STORAGE_KEYS.TRANSACTIONS, transactions);
 }
 
-function loadTarget() {
-  const raw = localStorage.getItem(STORAGE_KEYS.TARGET);
-  targetAmount = raw ? Number(raw) : DEFAULT_TARGET;
-  if (!raw) localStorage.setItem(STORAGE_KEYS.TARGET, String(DEFAULT_TARGET));
+async function loadTarget() {
+  const remote = await storageGetJSON(STORAGE_KEYS.TARGET);
+  if (typeof remote === 'number' && remote > 0) {
+    targetAmount = remote;
+    return;
+  }
+  targetAmount = DEFAULT_TARGET;
+  await saveTarget();
 }
 
-function saveTarget() {
-  localStorage.setItem(STORAGE_KEYS.TARGET, String(targetAmount));
+async function saveTarget() {
+  await storageSetJSON(STORAGE_KEYS.TARGET, targetAmount);
+}
+
+/* =========================================================
+   SINKRONISASI OTOMATIS (polling)
+   Mengecek data bersama secara berkala supaya perubahan yang
+   diinput pasangan ikut muncul di layar Anda tanpa perlu
+   memuat ulang halaman.
+   ========================================================= */
+function startSyncPolling() {
+  stopSyncPolling();
+  syncInterval = setInterval(pollForUpdates, SYNC_POLL_MS);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+}
+
+function stopSyncPolling() {
+  if (syncInterval) clearInterval(syncInterval);
+  syncInterval = null;
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') pollForUpdates();
+}
+
+async function pollForUpdates() {
+  if (isSyncing) return;
+  isSyncing = true;
+  try {
+    const [remoteTx, remoteTarget] = await Promise.all([
+      storageGetJSON(STORAGE_KEYS.TRANSACTIONS),
+      storageGetJSON(STORAGE_KEYS.TARGET),
+    ]);
+
+    let changed = false;
+    if (remoteTx && JSON.stringify(remoteTx) !== JSON.stringify(transactions)) {
+      transactions = remoteTx;
+      changed = true;
+    }
+    if (typeof remoteTarget === 'number' && remoteTarget !== targetAmount) {
+      targetAmount = remoteTarget;
+      changed = true;
+    }
+
+    if (changed) {
+      renderTarget();
+      renderSummary();
+      renderTable();
+    }
+    updateSyncStatus();
+  } finally {
+    isSyncing = false;
+  }
+}
+
+function updateSyncStatus() {
+  const el = $('syncStatus');
+  if (!el) return;
+  const time = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  el.textContent = `Tersinkron ${time}`;
 }
 
 /* =========================================================
@@ -1025,6 +1125,7 @@ function login(email, password) {
 }
 
 function logout() {
+  stopSyncPolling();
   localStorage.removeItem(STORAGE_KEYS.AUTH);
   loginScreen.hidden = false;
   dashboardScreen.hidden = true;
@@ -1108,7 +1209,7 @@ targetInput.addEventListener('input', (e) => {
   e.target.value = formatNumberLive(e.target.value);
 });
 
-targetForm.addEventListener('submit', (e) => {
+targetForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const value = parseRupiahInput(targetInput.value);
   if (value <= 0) {
@@ -1116,11 +1217,12 @@ targetForm.addEventListener('submit', (e) => {
     return;
   }
   targetAmount = value;
-  saveTarget();
+  await saveTarget();
   targetForm.hidden = true;
   targetDisplay.hidden = false;
   renderTarget();
   renderSummary();
+  updateSyncStatus();
   showToast('Target dana nikah diperbarui');
 });
 
@@ -1344,7 +1446,7 @@ modalOverlay.addEventListener('click', (e) => {
   if (e.target === modalOverlay) closeModal();
 });
 
-txForm.addEventListener('submit', (e) => {
+txForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const penabungEl = txForm.querySelector('input[name="penabung"]:checked');
@@ -1398,10 +1500,11 @@ txForm.addEventListener('submit', (e) => {
     showToast('Transaksi berhasil ditambahkan');
   }
 
-  saveTransactions();
+  await saveTransactions();
   closeModal();
   renderSummary();
   renderTable();
+  updateSyncStatus();
 });
 
 /* =========================================================
@@ -1422,26 +1525,28 @@ confirmOverlay.addEventListener('click', (e) => {
   if (e.target === confirmOverlay) closeDeleteConfirm();
 });
 
-confirmDeleteBtn.addEventListener('click', () => {
+confirmDeleteBtn.addEventListener('click', async () => {
   if (!pendingDeleteId) return;
   transactions = transactions.filter((t) => t.id !== pendingDeleteId);
-  saveTransactions();
+  await saveTransactions();
   closeDeleteConfirm();
   renderSummary();
   renderTable();
+  updateSyncStatus();
   showToast('Transaksi berhasil dihapus');
 });
 
 /* =========================================================
    BOOTSTRAP DASHBOARD
    ========================================================= */
-function bootDashboard() {
-  loadTarget();
-  loadTransactions();
+async function bootDashboard() {
+  await Promise.all([loadTarget(), loadTransactions()]);
   renderTarget();
   renderSummary();
   renderTable();
   startCountdown();
+  startSyncPolling();
+  updateSyncStatus();
 }
 
 /* =========================================================
